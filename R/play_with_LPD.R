@@ -1,25 +1,4 @@
-# Ideas
-# 1.Regularization: shrink LPD to benchmark (regression, EqMA,...)
-#     This is different from ordinary L1L2 shrinkage since weights/biases are not shrunken explicitly
-# 2.Why do we use optimized net for instability tracker? We could use random-initialized net instead (why is optimized more sensitive)
-#     Expect that weights/biases are such that neurons are mostly in comfort zone (not saturated)
-#     This way the net can best (over-)fit the data i.e. degrees of freedom are maximized
-#     Therefore the net is most sensitive to outliers or abnormal data
-# 3.Degrees of freedom of a net
-#     Has to do with neuron saturation: derivatives...
-#     Could be related to variability of LPD
-# 4.Hessian
-#     Based on LPD-parameters?
-#     Implement exact Hessian
-# 5.LPD: gradient of output i.e. LPD or LPD_cost
-#     Look at gradient of cost: determine important explanatories
-#     Look at Hessian of cost: identification, variance, t-value
-#     Look at gradient of trading performance
-# 6.Non-linear AR(1) example 4
-#     The net fits the data by changing the intercept instead of the AR(1)-weight
-#     This leads to a very rough/unstable LPD (at least for the intercept)
-#   Idea: impose smoothness of LPD!!!!!!!!!!
-#     Zero-shrinkage of smoothness measure
+
 
 rm(list=ls())
 # Load all relevant packages
@@ -33,7 +12,6 @@ if (!"xts"%in%inst_pack)
 if (!"neuralnet"%in%inst_pack)
   install.packages("neuralnet")
 
-# Use iml package for classic XAI approaches see: https://cran.r-project.org/web/packages/iml/vignettes/intro.html
 
 library(neuralnet)
 library(fGarch)
@@ -137,10 +115,14 @@ plot(nn)
 
 # Settings
 use_random_net<-F
+# feedforward net with trhee hideen layers of dimensions 5,4 and 3
 neuron_vec<-c(5,4,3)
+# Activation function at output
 linear_output<-F
+# Atan activation function (generally better numerical convergence)
 atan_not_sigmoid<-T
 LPD_at_single_observation<-F
+# Number iterations
 epochs<-100
 learning_rate<-0.5
 #--
@@ -165,7 +147,7 @@ list_layer_size<-layer_size<-getLayerSize(x_train, y_train, neuron_vec)
 list_layer_size
 set.seed(1)
 
-# Random initialization or optimal net
+# Random initialization or optimal (fitted) net
 if (use_random_net)
 {
   parm <- initializeParameters(list_layer_size)
@@ -193,13 +175,14 @@ if (use_random_net)
 fwd_prop <- forwardPropagation(x_train, parm, layer_size,linear_output,atan_not_sigmoid)
 
 cache<-fwd_prop
-
+# Compute MSE
 cost <- computeCost(y_train, fwd_prop)
+# MSE
 cost
 
-# Perturbate input
+# Perturbate input of k-th expalantory variable
 k<-3
-delta<-0.0001
+delta<-0.000001
 x_train_modified<-x_train
 x_train_modified[,k]<-x_train[,k]+delta
 
@@ -216,17 +199,17 @@ LPD_discret<-(cost_modified-cost)/delta
 # Exact LPD
 LPD_cost_exact<-LPD_cost(y_train,cache, parm, list_layer_size,linear_output,atan_not_sigmoid)$LPD_cost
 
-# Should be one: if it is different then select smaller delta above...
+# Should be one: if it is substantially different then select smaller delta>0 above...
 LPD_discret/LPD_cost_exact[k]
 
 
 
 ##########################################################################################################
 # 2. Linear Artificial data: LPD_cost (gradient of output)
-# 2.1 Some experiments checking backprogation, LPD and LPD_cost by comparing exact and discrete derivatives
+# 2.1 Some experiments checking backpropagation, LPD and LPD_cost by comparing exact and discrete derivatives
 #   -Backpropagation: gradient of MSE with respect to parameters (weights/biases)
 #   -LPD_cost: gradient of MSE with respct to input data x
-#   -LPD: gradient of output with respct to input data x
+#   -LPD: gradient of output with respect to input data x
 # Net architecture
 #   With more than one hidden layer convergence is difficult
 #   With a single hidden layer performance is comparable to linear regression
@@ -255,7 +238,7 @@ if (!atan_not_sigmoid)
   learning_rate<-learning_rate*5
 
 
-# Data
+# Generate artificial data
 setseed<-1
 set.seed(setseed)
 len<-1000
@@ -330,6 +313,7 @@ grads$dW_list[[layer]][j,k]/((cost_modified-cost)/delta)
 #   Therefore LPD_cost~0 (for full data-set)
 #   And therefore LPD_discret/LPD_cost can differ from one for optimized net
 k<-1
+# Try any of the following (if delta is too large, then discrete proxy is poor)
 delta<-0.000001
 delta<-0.001
 delta<-0.00015
@@ -528,49 +512,6 @@ summary(lm_obj)
 # T-value
 LPD_mat[k,]/sd_LPD
 
-if (F)
-{
-# Hessian: need first forward propagation of gradient
-  x<-x_train
-  y<-y_train
-  #  y<-matrix(1)
-  fwd_prop <- forwardPropagation(x, parm, layer_size,linear_output,atan_not_sigmoid)
-  cache<-fwd_prop
-
-  LPD_forward_obj<-LPD_forward(cache, parm, list_layer_size,linear_output,atan_not_sigmoid)
-
-  dA_list_forward<-LPD_forward_obj$dA_list_forward
-
-  LPD_obj<-LPD(cache, parm, list_layer_size,linear_output,atan_not_sigmoid)
-
-  dA_list<-LPD_obj$dA_list
-
-
-  Hess_mat<-matrix(ncol=list_layer_size$n_x,nrow=list_layer_size$n_x)
-  for (j in 1:list_layer_size$n_x)#j<-1
-  {
-    for (k in 1:list_layer_size$n_x)# k<-3
-    {
-      Hess_jk_obj<-Hessian_kj(dA_list,cache, parm, list_layer_size,linear_output,atan_not_sigmoid,dA_list_forward,k,j)
-#      Hess_mat[k,j]<-
-      Hess_mat[j,k]<-Hess_jk_obj$Hessian
-    }
-  }
-
-  solve(Hess_mat)
-  LPD_obj$LPD
-
-  Hess_obj<-Hessian_diag(dA_list,cache, parm, list_layer_size,linear_output,atan_not_sigmoid,dA_list_forward)
-
-# Mean Hessian
-  Hess_obj$Hessian
-# Last few point-Hessians
-  tail(Hess_obj$Hessian_t)
-# Plot of point-Hessians
-  ts.plot(Hess_obj$Hessian_t,col=rainbow(ncol(Hess_obj$Hessian_)))
-# Same but scaled Hessians: collinearity
-  ts.plot(apply(Hess_obj$Hessian_t,2,scale),col=rainbow(ncol(Hess_obj$Hessian_)))
-}
 
 #---------------------------
 # Out of sample performance
@@ -611,7 +552,7 @@ for (k in 1:layer_size$n_x)
 #############################################################################################################
 #################################################################################################################
 # 4. Non-linear net fitting non-stationary time-dependent AR(1)
-#   Net is stationary in the sense that the function is deterministic: same input at diferent time points generates same output
+#   Net is stationary in the sense that the function is deterministic: same input at different time points generates same output
 #   Sinusoidal AR(1) means that process is non-stationary
 # Question: can non-linearity adapt to non-stationarity and outperform linear model systematically out-of-sample?
 # Outcome:
@@ -649,7 +590,7 @@ set.seed(setseed)
 len<-1000
 # Frequency of AR(1) coefficient
 freq<-5
-
+# Generate (non-linear) data: AR(1) with time-dependent AR(1)-coefficient
 data<-generate_data_non_linear_ar1_func(len,lags,freq)
 
 x_train<-data$x_train
@@ -658,7 +599,7 @@ ar1<-data$ar1
 # Time dependent ar1-parameter
 ts.plot(ar1)
 
-
+ # Apply (false) linear model
 lm_obj<-lm(y_train~x_train)
 summary(lm_obj)
 mean(lm_obj$res^2)
