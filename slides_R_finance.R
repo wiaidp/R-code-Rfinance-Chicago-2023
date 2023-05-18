@@ -38,7 +38,7 @@ library(fGarch)
 
 source(paste(getwd(),"/R/neuralnet_functions.R",sep=""))
 
-# Some of the computations take a couple minutes: set recompute_resultsy<-F to skip computations (results will be loaded from result-folder)
+# Some of the computations take a couple minutes: set recompute_results<-F to skip computations (results will be loaded from result-folder)
 recompute_results<-F
 
 
@@ -122,8 +122,9 @@ apply(scaled,2,min)
 apply(scaled,2,max)
 #-----------------
 # Train-test split
-# The scaled data is uswd for parameter fitting
+# The scaled data is used for parameter fitting
 # The scaling depends on the activation function: in [0,1] for sigmoid and in [-1,1] for atan
+# Scaling is not necessary if linear_output==T below (scaling means that neural net forecasts must be scaled back to original data)
 # xts objects
 train_set_xts <- scaled[paste("/",in_out_sample_separator,sep=""),]
 test_set_xts <- scaled[paste(in_out_sample_separator,"/",sep=""),]
@@ -131,11 +132,13 @@ test_set_xts <- scaled[paste(in_out_sample_separator,"/",sep=""),]
 train_set<-as.matrix(train_set_xts)
 test_set<-as.matrix(test_set_xts)
 
-# These are scaled data for traing purposes: they are not xts-objects
+# These are scaled data for training purposes: not xts-objects
 x_train<-train_set[,-1]
 y_train<-train_set[,1]
 
-# Plot of complex net
+# Plot of net: we use neuralnet package only for plot
+# We rely on own package for deriving LPD/QPD (XAI-tool)
+# Corresponding functions are in R-folder
 neuron_vec<-c(100)
 colnames(train_set)<-paste("lag",0:(ncol(train_set)-1),sep="")
 n <- colnames(train_set)
@@ -173,6 +176,7 @@ hidden_neurons<-neuron_vec
 
 list_layer_size<-layer_size<-getLayerSize(x_train, y_train, hidden_neurons)
 
+# Some seetings for numerical optimization
 learning_rate<-1
 epochs<-10000
 #--
@@ -186,6 +190,7 @@ hyper_list<-list(epochs=epochs,learning_rate=learning_rate,linear_output=linear_
 # Train/Learn/Optimize
 setseed<-10
 set.seed(setseed)
+# Computations takes a couple seconds (one can load pre-trained from results-folder)
 if (recompute_results)
 {
 # Use backpropagation
@@ -195,15 +200,16 @@ if (recompute_results)
 {
   load(file=paste(path.results,"train_model_",neuron_vec,"_",atan_not_sigmoid,sep=""))
 }
-# Check convergence
+# Check convergence: MSE-curve should converge to (local) minimum
 ts.plot(train_model$cost_hist)
 cost_simple_backprop<-train_model$cost_hist[length(train_model$cost_hist)]
-# Retrieve optimized parameters
+# Retrieve optimized net parameters: organized in lists of weights and biases per layers
 updated_params<-train_model$updated_params
-
+updated_params
 #------------------------------------------------------------------
-# Compute LPD
-# In-sample LPD
+# Compute discrete LPD-proxy (discrete derivative)
+# In-sample
+# 1. Compute net output
 fwd_prop <- forwardPropagation(x_train, updated_params, layer_size,linear_output,atan_not_sigmoid)
 cache<-fwd_prop
 output<-fwd_prop$A_list[[length(fwd_prop$A_list)]]
@@ -211,30 +217,29 @@ output<-fwd_prop$A_list[[length(fwd_prop$A_list)]]
 cost <- computeCost(y_train, fwd_prop)
 cost
 
-# Select arbitrary observation
+# 2.a Select arbitrary observation (time point)
 t<-13
-# Select any explanatory variable
+# 2.b Select any explanatory variable (1 to 5)
 k<-2
-# Slightly perturbate the variable
+# 2.c Slightly perturbate the variable
 delta<-0.0001
 x_train_modified<-x_train
 x_train_modified[t,k]<-x_train[t,k]+delta
-# Re-run net with perturbation at input
+# 2.d Re-run net with perturbation at input
 fwd_prop_modified <- forwardPropagation(x_train_modified, updated_params, layer_size,linear_output,atan_not_sigmoid)
 cache_modified<-fwd_prop_modified
 output_modified<-fwd_prop_modified$A_list[[length(fwd_prop$A_list)]]
-# Compute discrete partial derivative
+# 2.e Compute discrete partial derivative
 (output_modified[t]-output[t])/delta
 
 
-# Compute exact LPD: always preferable to discrtete proxy!!!
+# 3. Compute exact LPD: always preferable to discrete proxy!!!
 LPD_obj<-LPD( cache, updated_params, list_layer_size,linear_output,atan_not_sigmoid)
 
 in_sample_LPD_t<-LPD_obj$LPD_t
 
-# Should match the above discrete proxy
+# 4. Check: should match the above discrete proxy (results depends on delta)
 in_sample_LPD_t[t,k]
-
 # Set-up LPD
 LPD_t<-LPD_obj$LPD_t
 
@@ -247,7 +252,7 @@ mean_LPD<-apply(LPD_t,2,mean)
 lm_obj<-lm(y_train~x_train)
 summary(lm_obj)
 
-# Compare standarddeviations of regression vs. NN
+# Compare MSEs
 mean(lm_obj$residuals^2)
 cost
 
@@ -263,7 +268,7 @@ lm_obj$coefficients[-1]
 ts.plot(in_sample_LPD_t,col=rainbow(ncol(in_sample_LPD_t)))
 
 #--------------------------------------------------------------------
-# Out-of-sample LPD
+# Same as above but out-of-sample
 x_test<-as.matrix(test_set[,2:ncol(test_set)])
 y_test<-as.matrix(test_set[,1],ncol=1)
 # Out-of-sample output of optimized net
@@ -282,7 +287,7 @@ out_sample_LPD_t<-LPD_obj$LPD_t
 # Set-up LPD
 LPD_t<-out_sample_LPD_t
 
-
+# Plot of LPD
 par(mfrow=c(1,2))
 colo<-rainbow(ncol(LPD_t))
 ts.plot(LPD_t,col=colo)
@@ -298,13 +303,15 @@ lines(bh_plot)
 #-------------------------------------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------------------------------------
 # R-code: random LPDs
-# Train 10 different random nets
+# Train 9 additional random nets (with different parameter initialization)
+# All random nets have converged to different local optima
 setseed<-10
 set.seed(setseed)
 anzsim<-9
 
 if (recompute_results)
 {
+# First net
   train_model <- trainModel(x_train, y_train, hyper_list=hyper_list)
 
   fwd_prop <- forwardPropagation(x_train, updated_params, layer_size,linear_output,atan_not_sigmoid)
@@ -319,6 +326,7 @@ if (recompute_results)
   LPD_array<-array(dim=c(anzsim+1,dim(LPD_t)))
   LPD_array[1,,]<-LPD_t
 
+# Additional nets
   for (i in 1:anzsim)
   {
   # Use backpropagation
@@ -413,22 +421,10 @@ plot(mplot,col=colo,lwd=1,main="Vola randpm LPDs all lags")
 
 
 
-# Variance is leading by one day draw-downs
-returns<-c(0,diff(bh_plot))
-cor_mat<-NULL
-max_lead<-5
-for (i in 1:max_lead)
-{
-  cor_mat<-rbind(cor_mat,cor(cbind(std_LPD[1:(nrow(std_LPD)+1-i),],returns[(i):length(returns)]))[1:dim(LPD_array)[3],dim(LPD_array)[3]+1]
-)
-}
-rownames(cor_mat)<-paste("Lead ",-1+1:max_lead,sep="")
-# Negative correlation at lead one day
-cor_mat
 
 #-------------------------------------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------------------------------------
-# R-code: LPD with nlminb
+# R-code: LPD with nlminb (not backpropagation)
 neuron_vec<-c(4)
 # Explanatory data for training
 x_train<-as.matrix(train_set[,2:ncol(train_set)])
@@ -541,7 +537,7 @@ plot(mplot,col=rainbow(ncol(in_sample_LPD_t)),lwd=1,main="LPD BTC Out-of-Sample"
 
 #-------------------------------------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------------------------------------
-# R-code: LPD complex net with backprop
+# R-code: LPD for more complex net with backprop
 # Feedforward net with hidden layer of 100 neurons
 neuron_vec<-100
 # Explanatory data for training
@@ -646,7 +642,7 @@ for (i in 1:ncol(mplot))
 
 #-------------------------------------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------------------------------------
-# R-code: LPD complex net with nlminb
+# R-code: LPD complex net with nlminb (not backpropagation)
 # Use nlminb for fitting the net
 setseed<-10
 set.seed(setseed)
@@ -756,15 +752,13 @@ lm_obj$coefficients[-1]
 #------------------------------------------------------------------------------------
 
 source(paste(path.pgm,"functions_XAI_paper.r",sep=""))
-# Scaled data leads to stronger dynamics in the LPD: with single 100-layer or 3,2 layer
-use_scaled_data<-T
-# Unscaled data leads to EqMA(6): more interesting!!!!
+# Unscaled (original) data: we use linear_output==T below (therefore scaling is not required)
 use_scaled_data<-F
 # Up to peak of BTC end 2017
 in_out_sample_separator<-"2018-01-01"
 
 
-# Load bitcoin and prepare data for usage with neuralnet package
+# Load bitcoin
 BTC_obj<-load_BTC_func(in_out_sample_separator,use_scaled_data,load_data)
 
 x_train<-BTC_obj$x_train
@@ -784,18 +778,19 @@ tail(x_test)
 head(y_test)
 tail(y_test)
 
+# Number of random nets (obtained by different random initializations of net parameters)
 anzsim<-100
 
 
 #-------------------------------------------------------------------------
 # Settings
 # Linear output
-#   Sigmoid output would be a problem for unscald data which can be negative
+#   Sigmoid output would be a problem for unscaled data (returns are negative and positive valued)
 #   Either use linear_output<-T (then the output neuron is linear) or atan_not_sigmoid<-T (atan function can be negative in contrast to sigmoid)
 linear_output<-T
-# Sigmoid activation
+# Sigmoid activation in hidden layer(s): can be changed...
 atan_not_sigmoid<-F
-# Optimization settings
+# Optimization settings: we can check convergence graphically below
 epochs<-200
 learning_rate<-0.1
 if (linear_output)
@@ -812,7 +807,7 @@ mean(lm_obj$res^2)
 mse_regression_out_sample<-mean((as.double(y_test)-lm_obj$coefficients[1+1:ncol(x_test)]%*%t(x_test))^2)
 mse_regression_out_sample
 #------------------
-# Net unregularized and regularized
+# Set-up net
 list_layer_size<-layer_size<-getLayerSize(x_train, y_train, neuron_vec)
 list_layer_size
 set.seed(1)
@@ -824,6 +819,7 @@ anzsim<-anzsim
 # No regularization
 lambda<-0.
 
+# Takes a couple minustes to perform (100 different nets are trained)
 if (recompute_results)
 {
   setseed<-0
@@ -848,14 +844,19 @@ if (recompute_results)
 # In-sample
     x<-x_train
     y<-y_train
-
+# This function trains the net, computes LPD and QPD as well as trading performances based on sign of forecasts (bus or sell tomorrow's return depending on sihn of today's net forecast)
+# No risk-management at this point (classic trading based on NN-forecasts)
     compute_obj<-compute_trade_perf_LPD_Hessian_func(x,y, updated_params, layer_size,linear_output,atan_not_sigmoid)
 
     output<-compute_obj$output
+# First trading strategy: buy or sell depending on sign of forecast
     perf_sign<-compute_obj$perf_sign
+# Second trading-strategy: allocate more capital if forecast larger in absolute value
     perf_prop<-compute_obj$perf_prop
+# LPD and QPD
     LPD_with_intercept<-compute_obj$LPD_with_intercept
     QPD<-compute_obj$QPD
+# MSE
     out_mse_in<-cbind(out_mse_in,output)
     mplot_sign_in<-cbind(mplot_sign_in,cumsum(perf_sign))
     mplot_prop_in<-cbind(mplot_prop_in,cumsum(perf_prop))
@@ -898,6 +899,7 @@ if (recompute_results)
 
 } else
 {
+# Load pre-trained nets (and results)
   load(file=paste(path.results,"bit_sign_trade_mse_in",sep=""))
   load(file=paste(path.results,"bit_prop_trade_mse_in",sep=""))
   load(file=paste(path.results,"bit_out_mse_in",sep=""))
@@ -911,6 +913,8 @@ if (recompute_results)
 }
 
 
+# Trading performances based on sign of forecasts
+# Performances of all 100 nets
 par(mfrow=c(1,1))
 mplot<-cbind(cumsum(as.double(y_test)),as.matrix(mplot_sign_out))
 colo<-rainbow(ncol(mplot))
@@ -929,11 +933,9 @@ box()
 
 
 
-# Sharpe-ratio: annualize with sqrt(12) (monthly data)
 
 
-
-# Aggregate performance (of all random nets): regularized performs slightly worse
+# Aggregate performance (of all random nets): Mean performance
 perf_agg_sign_mse<-apply(mplot_sign_out,1,mean)
 perf_agg_prop_mse<-apply(mplot_prop_out,1,mean)
 # Annualized Sharpe ratios
@@ -954,7 +956,7 @@ box()
 
 
 
-
+# Plot LPD
 par(mfrow=c(1,1))
 LPD_t_agg<-LPD_sd<-NULL
 # With or without intercept
@@ -1026,7 +1028,7 @@ box()
 
 
 
-
+# Plot all LPDs and aggregate mean-LPD (mean over 100 nets)
 par(mfrow=c(2,1))
 LPD_t_agg<-NULL
   # Select explanatory:
@@ -1082,9 +1084,9 @@ colo<-rainbow(ncol(mplot))
 
 par(mfrow=c(1,1))
 # k=1,...,6 are lagged BTC-returns
-# Note: we use lag-one for quantiles based on QPD
+# Note: we use lag-one QPD (could change to 2,3,4,5,6)
 k<-1
-# A trade per week
+# A trade per week (larger means less frequent trades)
 quant_s<-7
 
 quantile_select<-quantile_select_f<-1-1/quant_s
