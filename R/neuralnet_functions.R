@@ -748,68 +748,6 @@ Hessian_t <- function(dA_list,cache, params, list_layer_size,linear_output,atan_
 
 
 
-# This was used for checking Hessian and correcting bugs based on toy neural net
-dd_func<-function()
-{
-
-  # This is true Hessian for toy example
-  -2*cache$Z_list[[length(cache$Z_list)]]/(1+cache$Z_list[[length(cache$Z_list)]]^2)^2*
-    params$W_list[[2]][1]*(1/(1+cache$Z_list[[1]]^2))*
-    params$W_list[[1]][1]*(1/(1+cache$Z_list[[1]]^2))*params$W_list[[1]][1]*params$W_list[[2]][1]+
-    params$W_list[[1]][1]*params$W_list[[2]][1]*(1/(1+cache$Z_list[[length(cache$Z_list)]]^2))*
-    params$W_list[[1]][1]*(-2*cache$Z_list[[1]]/(1+cache$Z_list[[1]]^2)^2)
-
-  # OK: This one (first line) matches DDA_list[[1]]
-  -2*cache$Z_list[[length(cache$Z_list)]]/(1+cache$Z_list[[length(cache$Z_list)]]^2)^2
-  ddA_list[[1]]
-
-  # Next: this one matches first two lines
-  (t(params$W_list[[2]])%*% ddA_list[[i]])/(1+cache$Z_list[[1]]^2)
-
-  -2*cache$Z_list[[length(cache$Z_list)]]/(1+cache$Z_list[[length(cache$Z_list)]]^2)^2*
-    params$W_list[[2]][1]*(1/(1+cache$Z_list[[1]]^2))
-
-  # Problem: part of third line is missing!!! Should square (1/(1+cache$Z_list[[1]]^2))*params$W_list[[1]][1]*params$W_list[[2]][1]
-
-  -2*cache$Z_list[[length(cache$Z_list)]]/(1+cache$Z_list[[length(cache$Z_list)]]^2)^2*
-    params$W_list[[2]][1]*(1/(1+cache$Z_list[[1]]^2))*
-    params$W_list[[1]][1]#*(1/(1+cache$Z_list[[1]]^2))*params$W_list[[1]][1]*params$W_list[[2]][1]
-
-
-  t(params$W_list[[1]][1])*((t(params$W_list[[2]])%*% ddA_list[[i]])/(1+cache$Z_list[[1]]^2))
-
-  # 4.th and 5th lines
-
-  params$W_list[[1]][1]*params$W_list[[2]][1]*(1/(1+cache$Z_list[[length(cache$Z_list)]]^2))*
-    params$W_list[[1]][1]*(-2*cache$Z_list[[1]]/(1+cache$Z_list[[1]]^2)^2)
-
-
-  params$W_list[[1]][1]*(1/(1+cache$Z_list[[1]]^2))*params$W_list[[1]][1]*params$W_list[[2]][1]
-
-
-  # i=1: OK
-  dd1<-params$W_list[[1]][1]*(-2*cache$Z_list[[1]]/(1+cache$Z_list[[1]]^2)^2)
-
-
-
-  # i=2:
-  params$W_list[[2]][1]*(1/(1+cache$Z_list[[length(cache$Z_list)]]^2))*params$W_list[[1]][1]*dd1+
-    params$W_list[[2]][1]*(-2)*cache$Z_list[[length(cache$Z_list)]]/(1+cache$Z_list[[length(cache$Z_list)]]^2)^2*
-    dA_list_forward[[1]][,k,]*dA_list_forward[[1]][,k,]*params$W_list[[2]][1]
-
-
-
-  params$W_list[[i+1]]%*%t(matrix(ddA_listh[[i]][,k,],nrow=m))*params$W_list[[i]][,k]%*%(1/(1+cache$Z_list[[i+1]]^2))
-  params$W_list[[2]][1]*dd1*params$W_list[[1]][1]*(1/(1+cache$Z_list[[length(cache$Z_list)]]^2))
-}
-
-
-
-
-
-
-
-
 
 
 
@@ -1092,7 +1030,7 @@ updateParameters_L2reg <- function(grads, params, learning_rate,lambda)
 
 
 #----------------------------------------------------------------------------------------------
-
+# The following functions are necessary when using nlminb for optimization
 
 compute_number_parameters<-function(layer_size)
 {
